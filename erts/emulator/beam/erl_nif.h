@@ -84,14 +84,20 @@ typedef long long ErlNifSInt64;
 
 #ifdef HALFWORD_HEAP_EMULATOR
 #  define ERL_NIF_VM_VARIANT "beam.halfword" 
-typedef unsigned int ERL_NIF_TERM;
+typedef unsigned int ERL_NIF_TERM_INT_TYPE;
 #else
 #  define ERL_NIF_VM_VARIANT "beam.vanilla" 
 #  if SIZEOF_LONG == SIZEOF_VOID_P
-typedef unsigned long ERL_NIF_TERM;
+typedef unsigned long ERL_NIF_TERM_INT_TYPE;
 #  elif SIZEOF_LONG_LONG == SIZEOF_VOID_P
-typedef unsigned long long ERL_NIF_TERM;
+typedef unsigned long long ERL_NIF_TERM_INT_TYPE;
 #  endif
+#endif
+
+#ifdef CPP11_UNIQUE_TERM_TYPE
+enum class ERL_NIF_TERM : ERL_NIF_TERM_INT_TYPE {};
+#else
+typedef ERL_NIF_TERM_INT_TYPE ERL_NIF_TERM;
 #endif
 
 struct enif_environment_t;
