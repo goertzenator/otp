@@ -160,10 +160,10 @@ stop(ConnectionManager) ->
     end.
 			
 send(ConnectionManager, ChannelId, Type, Data, Timeout) ->
-    call(ConnectionManager, {data, ChannelId, Type, Data}, Timeout).
+    call(ConnectionManager, {data, ChannelId, {Type, Data}}, Timeout).
 
 send_eof(ConnectionManager, ChannelId) ->
-    cast(ConnectionManager, {eof, ChannelId}).
+    call(ConnectionManager, {data, ChannelId, eof}).
 
 %%====================================================================
 %% gen_server callbacks
@@ -288,11 +288,11 @@ handle_call({global_request, Pid, _, _, _} = Request, From,
     State = add_request(true, Channel#channel.local_id, From, State1),
     {noreply, State};
 
-handle_call({data, ChannelId, Type, Data}, From, 
+handle_call({data, ChannelId, Cmd}, From,
 	    #state{connection_state = #connection{channel_cache = _Cache} 
 		   = Connection0, 
 		   connection = ConnectionPid} = State) ->
-    channel_data(ChannelId, Type, Data, Connection0, ConnectionPid, From,
+    channel_data(ChannelId, Cmd, Connection0, ConnectionPid, From,
 		 State);
 
 handle_call({connection_info, Options}, From, 
@@ -453,18 +453,6 @@ handle_cast({adjust_window, ChannelId, Bytes},
     end,
     {noreply, State};
 
-handle_cast({eof, ChannelId}, 
-	    #state{connection = Pid, connection_state = 
-		   #connection{channel_cache = Cache}} = State) ->
-    case ssh_channel:cache_lookup(Cache, ChannelId) of			 
-	#channel{remote_id = Id} ->
-	    send_msg({connection_reply, Pid, 
-		      ssh_connection:channel_eof_msg(Id)}),
-	    {noreply, State};
-	undefined -> 
-	    {noreply, State}
-    end;
-
 handle_cast({success, ChannelId},  #state{connection = Pid} = State) ->
     Msg = ssh_connection:channel_success_msg(ChannelId),
     send_msg({connection_reply, Pid, Msg}),
@@ -567,8 +555,8 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-channel_data(Id, Type, Data, Connection0, ConnectionPid, From, State) ->
-    case ssh_connection:channel_data(Id, Type, Data, Connection0,
+channel_data(Id, Cmd, Connection0, ConnectionPid, From, State) ->
+    case ssh_connection:channel_data(Id, Cmd, Connection0,
 				     ConnectionPid, From) of
 	{{replies, Replies}, Connection} ->
 	    lists:foreach(fun send_msg/1, Replies),
