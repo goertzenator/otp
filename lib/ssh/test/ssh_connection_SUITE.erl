@@ -113,7 +113,8 @@ groups() ->
 						  simple_exec,
 						  small_cat,
 						  big_cat,
-						  send_after_exit
+						  send_after_exit,
+						  interrupted_send
 						 ]}].
 
 init_per_group(erlang_server, Config) ->
@@ -226,7 +227,7 @@ big_cat(Config) when is_list(Config) ->
 	ssh_connection:adjust_window(ConnectionRef, ChannelId0, size(Data)),
 
 	test_server:format("sending ~p byte binary~n",[size(Data)]),
-	ok = ssh_connection:send(ConnectionRef, ChannelId0, Data),
+	ok = ssh_connection:send(ConnectionRef, ChannelId0, Data, 10000),
 	%timer:sleep(3000),
 	ok = ssh_connection:send_eof(ConnectionRef, ChannelId0),
 
@@ -306,5 +307,81 @@ send_after_exit(Config) when is_list(Config) ->
 	receive
 		{ssh_cm, ConnectionRef,{closed, ChannelId0}} -> ok
 		after ?EXEC_TIMEOUT -> test_server:fail()
+	end.
+
+%--------------------------------------------------------------------
+interrupted_send(doc) ->
+    ["Use 'head' to cause a channel exit partway through a large send."];
+
+interrupted_send(suite) ->
+    [];
+
+interrupted_send(Config) when is_list(Config) ->
+    ConnectionRef = ssh_test_lib:connect(?SSH_DEFAULT_PORT, [{silently_accept_hosts, true},
+							     {user_interaction, false}]),
+    {ok, ChannelId0} = ssh_connection:session_channel(ConnectionRef, infinity),
+    success = ssh_connection:exec(ConnectionRef, ChannelId0,
+				  "head -c 4000000", infinity),
+
+	%% build 10MB binary
+	Data = << <<X:32>> || X <- lists:seq(1,2500000)>>,
+
+	%% expect remote end to send us 4MB back
+	<<ExpectedData:4000000/binary, _/binary>> = Data,
+
+	%% pre-adjust receive window so the other end doesn't block
+	ssh_connection:adjust_window(ConnectionRef, ChannelId0, size(Data)),
+
+	test_server:format("sending ~p byte binary~n",[size(Data)]),
+
+	case ssh_connection:send(ConnectionRef, ChannelId0, Data, 10000) of
+		{error, closed} -> ok;
+		ok -> test_server:fail({expected,{error,closed}});
+		{error, timeout} -> test_server:fail({expected,{error,closed}});
+		SendElse -> test_server:fail(SendElse)
+	end,
+
+	case ssh_connection:send_eof(ConnectionRef, ChannelId0) of
+		{error, closed} -> ok;
+		ok -> test_server:fail({expected,{error,closed}});
+		EofElse -> test_server:fail(EofElse)
+	end,
+
+	%% collect echoed data until eof
+	case interrupted_send_rx(ConnectionRef, ChannelId0) of
+		{ok, ExpectedData} -> ok;
+		{ok, Other} ->
+			case size(ExpectedData) =:= size(Other) of
+				true ->
+					test_server:format("received expected number of bytes, but bytes do not match~n",[]);
+				false ->
+					test_server:format("expected ~p but only received ~p~n",[size(ExpectedData), size(Other)])
+			end,
+			test_server:fail(receive_data_mismatch);
+		RxElse ->
+			test_server:fail(RxElse)
+	end,
+
+	%% receive close messages (eof already consumed)
+	receive
+		{ssh_cm, ConnectionRef, {exit_status, ChannelId0, 0}} -> ok
+		after ?EXEC_TIMEOUT -> test_server:fail()
+	end,
+	receive
+		{ssh_cm, ConnectionRef,{closed, ChannelId0}} -> ok
+		after ?EXEC_TIMEOUT -> test_server:fail()
+	end.
+
+interrupted_send_rx(ConnectionRef, ChannelId) ->
+	interrupted_send_rx(ConnectionRef, ChannelId, []).
+
+interrupted_send_rx(ConnectionRef, ChannelId, Acc) ->
+	receive
+		{ssh_cm, ConnectionRef, {data, ChannelId, 0, Data}} ->
+			%% ssh_connection:adjust_window(ConnectionRef, ChannelId, size(Data)),  % window was pre-adjusted, don't adjust again here
+			interrupted_send_rx(ConnectionRef, ChannelId, [Data | Acc]);
+		{ssh_cm, ConnectionRef, {eof, ChannelId}} ->
+			{ok, iolist_to_binary(lists:reverse(Acc))}
+		after ?EXEC_TIMEOUT -> timeout
 	end.
 
