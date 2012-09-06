@@ -301,7 +301,7 @@ send_after_exit(Config) when is_list(Config) ->
 		after ?EXEC_TIMEOUT -> test_server:fail()
 	end,
 	receive
-		{ssh_cm, ConnectionRef, {exit_status, ChannelId0, 0}} -> ok
+		{ssh_cm, ConnectionRef, {exit_status, ChannelId0, _}} -> ok
 		after ?EXEC_TIMEOUT -> test_server:fail()
 	end,
 	receive
